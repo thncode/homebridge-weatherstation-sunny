@@ -1,23 +1,13 @@
-var Service, Characteristic, HomebridgeAPI, FakeGatoHistoryService;
+var Service, Characteristic, HomebridgeAPI, UUIDGen, FakeGatoHistoryService;
 var inherits = require('util').inherits;
 var os = require("os");
 var hostname = os.hostname();
 const fs = require('fs');
 const moment = require('moment');
 
-
-var intervalID;
-
 const readFile = "/home/pi/WeatherStation/data.txt";
 
-var sunlight;
-var battery;
-
-var alertLevel;
-
-var glog;
-var ctime;
-
+var sunlight, battery, alertLevel, readtime, sunny, wasSunny;
 var lastActivation, lastReset, lastChange, timesOpened, timeOpen, timeClose;
 
 module.exports = function (homebridge) {
@@ -25,90 +15,95 @@ module.exports = function (homebridge) {
     Service = homebridge.hap.Service;
     Characteristic = homebridge.hap.Characteristic;
     HomebridgeAPI = homebridge;
+    UUIDGen = homebridge.hap.uuid;
     FakeGatoHistoryService = require("fakegato-history")(homebridge);
 
     homebridge.registerAccessory("homebridge-weatherstation-sunny", "WeatherStationSunny", WeatherStationSunny);
 };
 
 
-function read() {
-	var data = fs.readFileSync(readFile, "utf-8");
-	var lastSync = Date.parse(data.substring(0, 19));
-	sunlight = parseInt(data.substring(46), 10);
-	battery = parseFloat(data.substring(57));
-}
-
-
 function WeatherStationSunny(log, config) {
+
     var that = this;
-    this.log = glog = log;
+    this.log = log;
     this.name = config.name;
     this.displayName = this.name;
     this.deviceId = config.deviceId;
-    this.interval = Math.min(Math.max(config.interval, 1), 60);
 
     this.config = config;
 
-    this.storedData = {};
-
-	  alertLevel = config['alertLevel'];
+	alertLevel = config['alertLevel'];
 
     this.setUpServices();
     
-    read();
+    this.readData();
+    
+   	fs.watch(readFile, (event, filename) => {
+   		if (event === 'change') this.readData();
+   	});
+};
 
-	  intervalID = setInterval(function() {
+
+WeatherStationSunny.prototype.readData = function () {
+
+	var data = fs.readFileSync(readFile, "utf-8");
+	var lastSync = Date.parse(data.substring(0, 19));
+	if (readtime == lastSync) return;
+	readtime = lastSync;
+
+	sunlight = parseInt(data.substring(46), 10);
+	battery = parseFloat(data.substring(57));
+
+    sunny = sunlight > alertLevel ? 1 : 0;
+    
+    if (sunny != wasSunny) {
+    	
+    	wasSunny = sunny;
+
+		this.log("Light data: ", sunlight, battery);
 		
-		var stats = fs.statSync(readFile);
-		
-		var doit = false;
-		if (ctime) {
-			if (ctime.getTime() != stats.mtime.getTime()) {
-				ctime = stats.mtime;
-				doit = true;
-			}
+		this.fakeGatoHistoryService.addEntry({ time: moment().unix(), status: sunny });
+	
+		this.sunAlertService.getCharacteristic(Characteristic.ContactSensorState).updateValue(sunny, null);
+	
+		if (sunny) {
+			this.timesOpened = this.timesOpened + 1;
+	        this.timeClose = this.timeClose + (moment().unix() - this.lastChange);
+	        this.lastActivation = moment().unix() - this.fakeGatoHistoryService.getInitialTime();
+		    this.sunAlertService.getCharacteristic(Characteristic.LastActivation).updateValue(this.lastActivation, null)
+	        this.sunAlertService.getCharacteristic(Characteristic.TimesOpened).updateValue(this.timesOpened, null)
 		}
 		else {
-			ctime = stats.mtime;
-			doit = true;
+	      	this.timeOpen = this.timeOpen + (moment().unix() - this.lastChange);
 		}
-			
-		if (doit) {
-			read();
-			glog("Sun data: ", sunlight, alertLevel, battery);
-
-			that.fakeGatoHistoryService.addEntry({
-				time: new Date().getTime() / 1000,
-				status: sunlight > alertLevel ? 1 : 0
-				});
-		}
-	}, 2000);
-};
+	
+	    this.lastChange = moment().unix();
+	    this.fakeGatoHistoryService.setExtraPersistedData([{ "lastActivation": this.lastActivation, "lastReset": this.lastReset, "lastChange": this.lastChange, 
+	    													 "timesOpened": this.timesOpened, "timeOpen": this.timeOpen, "timeClose": this.timeClose }]);
+    }
+    this.batteryService.getCharacteristic(Characteristic.BatteryLevel).updateValue(null);
+    this.batteryService.getCharacteristic(Characteristic.StatusLowBattery).updateValue(null);
+}; 
 
 
 WeatherStationSunny.prototype.getFirmwareRevision = function (callback) {
-    callback(null, '1.0.0');
+    return callback(null, '1.0');
 };
 
 WeatherStationSunny.prototype.getBatteryLevel = function (callback) {
-	var perc = (battery - 0.8) * 100;
-    callback(null,perc);
+    return callback(null, (battery - 0.8) * 100);
 };
 
 WeatherStationSunny.prototype.getStatusActive = function (callback) {
-    callback(null, true);
+    return callback(null, true);
 };
 
 WeatherStationSunny.prototype.getStatusLowBattery = function (callback) {
-	if (battery >= 0.8)
-        callback(null, Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL);
-    else
-        callback(null, Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
+    return callback(null, battery >= 0.8 ? Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL : Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
 };
 
-WeatherStationSunny.prototype.getStatusSun = function (callback) {	
-    callback(null, sunlight > alertLevel ? 
-    		 Characteristic.ContactSensorState.CONTACT_NOT_DETECTED : Characteristic.ContactSensorState.CONTACT_DETECTED);
+WeatherStationSunny.prototype.getStatusSunlight = function (callback) {	
+    callback(null, sunny);
 };
 
 
@@ -260,7 +255,7 @@ WeatherStationSunny.prototype.setUpServices = function () {
     	this.lastActivation = 0;
     	this.lastReset = moment().unix() - moment('2001-01-01T00:00:00Z').unix();
     	this.lastChange = moment().unix();
-    	this.timeOpened = 0;
+    	this.timesOpened = 0;
     	this.timeOpen = 0;
     	this.timeClose = 0;
            
