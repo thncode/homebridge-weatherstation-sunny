@@ -48,11 +48,12 @@ WeatherStationSunny.prototype.readData = function () {
 
 	var data = fs.readFileSync(readFile, "utf-8");
 	var lastSync = Date.parse(data.substring(0, 19));
+	if (isNaN(lastSync)) return;
 	if (readtime == lastSync) return;
 	readtime = lastSync;
 
-	sunlight = parseInt(data.substring(46), 10);
-	battery = parseFloat(data.substring(57));
+	sunlight = parseInt(data.substring(45), 10);
+	battery = parseFloat(data.substring(58));
 
     sunny = sunlight > alertLevel ? 1 : 0;
     
@@ -177,8 +178,6 @@ WeatherStationSunny.prototype.setUpServices = function () {
     this.sunAlertService.getCharacteristic(Characteristic.StatusActive)
         .on('get', this.getStatusActive.bind(this));
 
-    this.fakeGatoHistoryService = new FakeGatoHistoryService("door", this, { storage: 'fs' });
-
     Characteristic.OpenDuration = function() {
     	 Characteristic.call(this, 'Time open', 'E863F118-079E-48FF-8F27-9C2605A29F52');
          this.setProps({
@@ -250,29 +249,43 @@ WeatherStationSunny.prototype.setUpServices = function () {
     this.sunAlertService.addCharacteristic(Characteristic.ResetTotal)
         .on('get', this.getReset.bind(this))
         .on('set', this.setReset.bind(this));
-        
-    if (this.fakeGatoHistoryService.getExtraPersistedData() == undefined) {
-    	this.lastActivation = 0;
-    	this.lastReset = moment().unix() - moment('2001-01-01T00:00:00Z').unix();
-    	this.lastChange = moment().unix();
-    	this.timesOpened = 0;
-    	this.timeOpen = 0;
-    	this.timeClose = 0;
-           
-        this.fakeGatoHistoryService.setExtraPersistedData([{"lastActivation": this.lastActivation, "lastReset": this.lastReset, 
-        				"lastChange": this.lastChange, "timesOpened": this.timesOpened, "timeOpen": this.timeOpen, "timeClose": this.timeClose}]);
 
-        } else {
-            this.lastActivation = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastActivation;
-            this.lastReset = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastReset;
-            this.lastChange = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastChange;
-            this.timesOpened = this.fakeGatoHistoryService.getExtraPersistedData()[0].timesOpened;
-            this.timeOpen = this.fakeGatoHistoryService.getExtraPersistedData()[0].timeOpen;
-            this.timeClose = this.fakeGatoHistoryService.getExtraPersistedData()[0].timeClose;
-        }
-        
-    var CustomCharacteristic = {};
+    this.fakeGatoHistoryService = new FakeGatoHistoryService("door", this, { storage: 'fs' });
     
+    this.fakeGatoHistoryLoaded();
+};
+
+
+WeatherStationSunny.prototype.fakeGatoHistoryLoaded = function () {
+    if (this.fakeGatoHistoryService.isHistoryLoaded() == false) {
+		this.log("wait for history load");
+ 		setTimeout(this.fakeGatoHistoryLoaded.bind(this), 100);
+    } else {
+		this.log("history loaded");
+		
+	    this.extra = this.fakeGatoHistoryService.getExtraPersistedData();
+	            
+	    if (this.extra == undefined) {
+	    	
+	    	this.lastActivation = 0;
+	    	this.lastReset = moment().unix() - moment('2001-01-01T00:00:00Z').unix();
+	    	this.lastChange = moment().unix();
+	    	this.timesOpened = 0;
+	    	this.timeOpen = 0;
+	    	this.timeClose = 0;
+	           
+	        this.fakeGatoHistoryService.setExtraPersistedData([{"lastActivation": this.lastActivation, "lastReset": this.lastReset, 
+	        				"lastChange": this.lastChange, "timesOpened": this.timesOpened, "timeOpen": this.timeOpen, "timeClose": this.timeClose}]);
+	
+	        } else {
+	            this.lastActivation = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastActivation;
+	            this.lastReset = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastReset;
+	            this.lastChange = this.fakeGatoHistoryService.getExtraPersistedData()[0].lastChange;
+	            this.timesOpened = this.fakeGatoHistoryService.getExtraPersistedData()[0].timesOpened;
+	            this.timeOpen = this.fakeGatoHistoryService.getExtraPersistedData()[0].timeOpen;
+	            this.timeClose = this.fakeGatoHistoryService.getExtraPersistedData()[0].timeClose;
+	        }        
+    }
 };
 
 
